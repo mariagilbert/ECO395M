@@ -1,0 +1,566 @@
+---
+title: "Assignment 2"
+author: "Maria Gilbert"
+date: "3/1/2021"
+output:
+  md_document: default
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(scales)
+library(FNN)
+library(class)
+library(rsample)
+library(caret)
+library(modelr)
+library(parallel)
+library(foreach)
+library(mosaic)
+library(mosaicData)
+
+
+capmetro_UT <- read.csv("~/Downloads/capmetro_UT.csv")
+data(SaratogaHouses)
+german_credit <- read.csv("~/Downloads/german_credit.csv")
+hotels_dev <- read.csv("~/Downloads/hotels_dev.csv")
+hotels_val <- read.csv("~/Downloads/hotels_val.csv")
+
+```
+
+
+# Data Visualization: Capitol Metro
+A) One panel of line graphs that plot average boardings at each hour of the day, with a different line for each month, faceted by day of the week. 
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+capmetro_UT = mutate(capmetro_UT,
+               day_of_week = factor(day_of_week,
+                 levels=c("Mon", "Tue", "Wed","Thu", "Fri", "Sat", "Sun")),
+               month = factor(month,
+                 levels=c("Sep", "Oct","Nov")))
+
+month_filter <- capmetro_UT %>%
+  filter(month %in% c("Sep","Oct","Nov"))
+
+month_filter %>%
+  ggplot(aes(x=hour_of_day,y=boarding,group=month,color=month))+geom_line()+facet_wrap(~day_of_week)+scale_x_continuous(labels=scales::number_format(accuracy=1),breaks=seq(0,24,1))+theme(aspect.ratio=0.5)+ggtitle("Average Capitol Metro boardings by hour, day, and month")+xlab("Hour of day")+ylab("Average number of boardings")
+
+```
+\
+B) One panel of scatter plots of boardings by temperature, faceted by hour of day and colored according to weekday versus weekend. 
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+capmetro_UT<- capmetro_UT %>%
+  mutate(week_day = if_else(day_of_week == "Sat" | day_of_week == "Sun", "weekend", "weekday"))
+
+ggplot(data=capmetro_UT,aes(x=temperature,y=boarding)) +
+  geom_point(aes(color = week_day)) +
+  facet_wrap(~hour_of_day)
+```
+\
+
+
+# Saratoga House Prices
+
+\
+
+## Linear model
+
+\
+
+RMSE of the professor's simple model:
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+SaratogaHouses$roomsize <- (SaratogaHouses$livingArea)/(SaratogaHouses$rooms)
+
+saratoga_split = initial_split(SaratogaHouses, prop=0.8)
+saratoga_train = training(saratoga_split)
+saratoga_test = testing(saratoga_split)
+
+lm1 = lm(price ~ lotSize + bedrooms + bathrooms, data=saratoga_train)
+lm2 = lm(price ~ lotSize + age + livingArea + bedrooms + fireplaces + bathrooms + rooms + heating + fuel + centralAir, data=saratoga_train)
+lm3 = lm(price ~ (lotSize + age + livingArea + bedrooms + fireplaces + bathrooms + rooms + heating + fuel + centralAir)^2,data=saratoga_train)
+rmse(lm1,saratoga_test)
+```
+
+\
+
+RMSE of the professor's moderate model:
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+rmse(lm2,saratoga_test)
+```
+
+\
+
+RMSE of the professor's advanced model:
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+rmse(lm3,saratoga_test)
+```
+
+\
+
+I found that a linear regression of price, log(lotSize+1), age, log(livingArea/rooms), landValue, livingArea, bedrooms, fireplaces, bathrooms, log(rooms+1), heating, centralAir, bedrooms times bathrooms, age times pctCollege, and newConstruction resulted in an RMSE of:
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+model <- lm(price ~ log(lotSize+1) + age + log(roomsize) + landValue + livingArea + bedrooms + fireplaces + bathrooms + log(rooms+1) + heating + centralAir + bedrooms*bathrooms + age*pctCollege + newConstruction,data=saratoga_train)
+rmse(model,saratoga_test)
+```
+
+\
+
+I tested its relative improvement over the professor's moderate model several times, finding an improvement between 10% and 20%.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+rmse(lm2,saratoga_test)/rmse(model,saratoga_test)
+```
+
+\
+
+
+## KNN model
+
+\
+
+For the KNN model, I tested RMSE using different values of K, based on the scaled parameters of log(lotSize+1),age,log(livingArea/rooms), landValue, livingArea, bedrooms, fireplaces, bathrooms, log(rooms+1), heating, centralAir, bedrooms times bathrooms, age times pctCollege, and newConstruction. 
+
+\
+
+For K = 25, RMSE is:
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+SaratogaHouses$log_lotSize_scaled <- (log(SaratogaHouses$lotSize+1))/2.58
+SaratogaHouses$age_scaled <- (SaratogaHouses$age-28)/(73-28)
+SaratogaHouses$log_roomsize_scaled <- ((log(SaratogaHouses$roomsize))-4.446565)/(6.325553-4.446565)
+SaratogaHouses$landValue_scaled <- ((SaratogaHouses$landValue)-200)/(412600-200)
+SaratogaHouses$livingArea_scaled <- ((SaratogaHouses$livingArea)-616)/(5228-616)
+SaratogaHouses$bedrooms_scaled <- ((SaratogaHouses$bedrooms)-min(SaratogaHouses$bedrooms))/(max(SaratogaHouses$bedrooms)-min(SaratogaHouses$bedrooms))
+SaratogaHouses$fireplaces_scaled <- ((SaratogaHouses$fireplaces)-min(SaratogaHouses$fireplaces))/(max(SaratogaHouses$fireplaces)-min(SaratogaHouses$fireplaces))
+SaratogaHouses$bathrooms_scaled <- ((SaratogaHouses$bathrooms)-min(SaratogaHouses$bathrooms))/(max(SaratogaHouses$bathrooms)-min(SaratogaHouses$bathrooms))
+SaratogaHouses$log_rooms_scaled <- (log(SaratogaHouses$rooms)-min(log(SaratogaHouses$rooms)))/(max(log(SaratogaHouses$rooms))-min(log(SaratogaHouses$rooms)))
+SaratogaHouses$bedroomsbathrooms_scaled <- ((SaratogaHouses$bedrooms)*(SaratogaHouses$bathrooms)-min((SaratogaHouses$bedrooms)*(SaratogaHouses$bathrooms)))/(max((SaratogaHouses$bedrooms)*(SaratogaHouses$bathrooms))-min((SaratogaHouses$bedrooms)*(SaratogaHouses$bathrooms)))
+SaratogaHouses$agepctCollege_scaled <- ((SaratogaHouses$age)*(SaratogaHouses$pctCollege)-min((SaratogaHouses$age)*(SaratogaHouses$pctCollege)))/(max((SaratogaHouses$age)*(SaratogaHouses$pctCollege))-min((SaratogaHouses$age)*(SaratogaHouses$pctCollege)))
+
+saratoga_split2 = initial_split(SaratogaHouses, prop=0.8)
+saratoga_train2 = training(saratoga_split2)
+saratoga_test2 = testing(saratoga_split2)
+
+knn25 = knnreg(price ~ log_lotSize_scaled + age_scaled + log_roomsize_scaled + landValue_scaled + livingArea_scaled + bedrooms_scaled + fireplaces_scaled + bathrooms_scaled + log_rooms_scaled + heating + centralAir + bedroomsbathrooms_scaled + agepctCollege_scaled + newConstruction,data=saratoga_train2,k=25)
+rmse(knn25,saratoga_test2)
+```
+
+\
+
+For K = 26, RMSE is:
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+knn26 = knnreg(price ~ log_lotSize_scaled + age_scaled + log_roomsize_scaled + landValue_scaled + livingArea_scaled + bedrooms_scaled + fireplaces_scaled + bathrooms_scaled + log_rooms_scaled + heating + centralAir + bedroomsbathrooms_scaled + agepctCollege_scaled + newConstruction,data=saratoga_train2,k=26)
+rmse(knn26,saratoga_test2)
+```
+
+\
+
+For K = 27, RMSE is:
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+knn27 = knnreg(price ~ log_lotSize_scaled + age_scaled + log_roomsize_scaled + landValue_scaled + livingArea_scaled + bedrooms_scaled + fireplaces_scaled + bathrooms_scaled + log_rooms_scaled + heating + centralAir + bedroomsbathrooms_scaled + agepctCollege_scaled + newConstruction,data=saratoga_train2,k=27)
+rmse(knn27,saratoga_test2)
+```
+
+\
+
+For K = 28, RMSE is:
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+knn28 = knnreg(price ~ log_lotSize_scaled + age_scaled + log_roomsize_scaled + landValue_scaled + livingArea_scaled + bedrooms_scaled + fireplaces_scaled + bathrooms_scaled + log_rooms_scaled + heating + centralAir + bedroomsbathrooms_scaled + agepctCollege_scaled + newConstruction,data=saratoga_train2,k=28)
+rmse(knn28,saratoga_test2)
+```
+
+\
+
+For K = 29, RMSE is:
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+knn29 = knnreg(price ~ log_lotSize_scaled + age_scaled + log_roomsize_scaled + landValue_scaled + livingArea_scaled + bedrooms_scaled + fireplaces_scaled + bathrooms_scaled + log_rooms_scaled + heating + centralAir + bedroomsbathrooms_scaled + agepctCollege_scaled + newConstruction,data=saratoga_train2,k=29)
+rmse(knn29,saratoga_test2)
+```
+
+\
+
+For K = 30, RMSE is:
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+knn30 = knnreg(price ~ log_lotSize_scaled + age_scaled + log_roomsize_scaled + landValue_scaled + livingArea_scaled + bedrooms_scaled + fireplaces_scaled + bathrooms_scaled + log_rooms_scaled + heating + centralAir + bedroomsbathrooms_scaled + agepctCollege_scaled + newConstruction,data=saratoga_train2,k=30)
+rmse(knn30,saratoga_test2)
+```
+
+\
+
+For K = 31, RMSE is:
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+knn31 = knnreg(price ~ log_lotSize_scaled + age_scaled + log_roomsize_scaled + landValue_scaled + livingArea_scaled + bedrooms_scaled + fireplaces_scaled + bathrooms_scaled + log_rooms_scaled + heating + centralAir + bedroomsbathrooms_scaled + agepctCollege_scaled + newConstruction,data=saratoga_train2,k=31)
+rmse(knn31,saratoga_test2)
+```
+
+\
+
+For K = 32, RMSE is:
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+knn32 = knnreg(price ~ log_lotSize_scaled + age_scaled + log_roomsize_scaled + landValue_scaled + livingArea_scaled + bedrooms_scaled + fireplaces_scaled + bathrooms_scaled + log_rooms_scaled + heating + centralAir + bedroomsbathrooms_scaled + agepctCollege_scaled + newConstruction,data=saratoga_train2,k=32)
+rmse(knn32,saratoga_test2)
+```
+
+\
+
+For K = 33, RMSE is:
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+knn33 = knnreg(price ~ log_lotSize_scaled + age_scaled + log_roomsize_scaled + landValue_scaled + livingArea_scaled + bedrooms_scaled + fireplaces_scaled + bathrooms_scaled + log_rooms_scaled + heating + centralAir + bedroomsbathrooms_scaled + agepctCollege_scaled + newConstruction,data=saratoga_train2,k=33)
+rmse(knn33,saratoga_test2)
+```
+
+\
+
+For K = 34, RMSE is:
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+knn34 = knnreg(price ~ log_lotSize_scaled + age_scaled + log_roomsize_scaled + landValue_scaled + livingArea_scaled + bedrooms_scaled + fireplaces_scaled + bathrooms_scaled + log_rooms_scaled + heating + centralAir + bedroomsbathrooms_scaled + agepctCollege_scaled + newConstruction,data=saratoga_train2,k=34)
+rmse(knn34,saratoga_test2)
+```
+
+\
+
+For K = 35, RMSE is:
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+knn35 = knnreg(price ~ log_lotSize_scaled + age_scaled + log_roomsize_scaled + landValue_scaled + livingArea_scaled + bedrooms_scaled + fireplaces_scaled + bathrooms_scaled + log_rooms_scaled + heating + centralAir + bedroomsbathrooms_scaled + agepctCollege_scaled + newConstruction,data=saratoga_train2,k=35)
+rmse(knn35,saratoga_test2)
+```
+
+\
+
+For K = 36, RMSE is:
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+knn36 = knnreg(price ~ log_lotSize_scaled + age_scaled + log_roomsize_scaled + landValue_scaled + livingArea_scaled + bedrooms_scaled + fireplaces_scaled + bathrooms_scaled + log_rooms_scaled + heating + centralAir + bedroomsbathrooms_scaled + agepctCollege_scaled + newConstruction,data=saratoga_train2,k=36)
+rmse(knn36,saratoga_test2)
+```
+\
+
+Because the training set and testing set are randomly regenerating each time I knit my document, there is some variance in which K results in the lowest RMSE. The relative improvement of my KNN model over the professor's moderate model is: 
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+rmse(model,saratoga_test)/min(rmse(knn25,saratoga_test2),rmse(knn26,saratoga_test2),rmse(knn27,saratoga_test2),rmse(knn28,saratoga_test2),rmse(knn29,saratoga_test2),rmse(knn30,saratoga_test2),rmse(knn31,saratoga_test2),rmse(knn32,saratoga_test2),rmse(knn33,saratoga_test2),rmse(knn34,saratoga_test2),rmse(knn35,saratoga_test2),rmse(knn36,saratoga_test2))
+```
+
+# Classification and retrospective sampling
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+german_credit <- german_credit %>%
+  mutate(Default2 = if_else(Default == "1", "Yes", "No"))
+
+ggplot(data=german_credit,aes(x=history,y=Default))+geom_bar(stat="summary",fun.y="mean")+xlab("Credit history rating")+ylab("Probability of loan defaulting")+ggtitle("Probability of loan defaulting by credit history rating")
+
+credit_model <- glm(Default ~ duration + amount + installment + age + history + purpose + foreign, data=german_credit,family=binomial)
+
+summary(credit_model)
+```
+\
+
+It appears that having a poor or terrible credit history tends to lead to higher probability of a customer paying off their loan. I would guess that the reason for this could be that the bank only approves loans of small amounts, high interest rates, and/or some sort of collateral for those with poor and terrible credit scores, but is willing to offer riskier loans to those with good credit scores. 
+
+\
+
+Given that over half of those with good credit scores end up defaulting on their loans, I think that the bank should mitigate some of the risk within that group by limiting the amounts of their loans, increasing their interest rates, or requiring collateral. If they mitigate some of the risk of the good credit score group using the methods that they are likely using for the lower credit score groups, that could help to decrease the amount of people that are defaulting on their loans. 
+
+\
+
+# Children and hotel reservations
+
+\
+
+## Model Building
+Baseline 1: a small model using only market segment, number of adults, type of customer, and whether or not the customers are repeat guests.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+library(tidymodels)
+library(pROC)
+library(ROCR)
+
+baseline_model1 <- lm(children ~ market_segment + adults + customer_type + is_repeated_guest,data=hotels_dev)
+
+#summary(baseline_model1)
+```
+
+\
+
+Confusion matrix: 
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+phat_train_baseline1 = predict(baseline_model1,hotels_dev)
+yhat_train_baseline1 = ifelse(phat_train_baseline1 > 0.5,1,0)
+confusion_out1 = table(y=hotels_dev$children, yhat=yhat_train_baseline1)
+
+confusion_out1
+```
+
+\
+
+Out-of-sample performance, based on confusion matrix:
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+sum(diag(confusion_out1))/sum(confusion_out1)
+```
+
+\
+
+This model has a 92% out-of-sample performance.
+
+\
+
+Baseline 2: a big model that uses all possible predictors except for arrival date.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+hotels_dev$adults_squared <- (hotels_dev$adults)^2
+hotels_dev$weekend_squared <- (hotels_dev$stays_in_weekend_nights)^2
+hotels_dev$week_squared <- (hotels_dev$stays_in_week_nights)^2
+
+baseline_model2 <- lm(children ~ . - arrival_date - adults_squared - weekend_squared - week_squared,data=hotels_dev)
+
+#summary(baseline_model2)
+```
+
+\
+
+Confusion matrix:
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+phat_train_baseline2 = predict(baseline_model2,hotels_dev)
+yhat_train_baseline2 = ifelse(phat_train_baseline2 > 0.5,1,0)
+confusion_out2 = table(y=hotels_dev$children, yhat=yhat_train_baseline2)
+
+confusion_out2
+```
+
+\
+
+Out-of-sample performance, based on confusion matrix:
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+sum(diag(confusion_out2))/sum(confusion_out2)
+```
+\
+
+I found that the model including every predictor except arrival date had a 93.5% out-of-sample performance.
+
+\
+
+The best linear model I can build
+
+\
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+linmodel <- lm(children ~ hotel + lead_time + meal + stays_in_weekend_nights + stays_in_week_nights + adults + market_segment + distribution_channel + is_repeated_guest + log(1+previous_bookings_not_canceled) + reserved_room_type + assigned_room_type + deposit_type + days_in_waiting_list + average_daily_rate + customer_type + total_of_special_requests + adults_squared + weekend_squared + week_squared,data=hotels_dev,family=binomial)
+
+summary(linmodel)
+```
+
+\
+
+I found it very difficult to come up with a model that was any better than the second baseline model. My model has only slightly higher out-of-sample performance.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+phat_train_linmodel = predict(linmodel,hotels_dev)
+yhat_train_linmodel = ifelse(phat_train_linmodel > 0.5,1,0)
+confusion_out3 = table(y=hotels_dev$children, yhat=yhat_train_linmodel)
+
+confusion_out3
+
+sum(diag(confusion_out3))/sum(confusion_out3)
+```
+
+\
+
+## Model Validation: Step 1
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+hotels_val$adults_squared <- (hotels_val$adults)^2
+hotels_val$weekend_squared <- (hotels_val$stays_in_weekend_nights)^2
+hotels_val$week_squared <- (hotels_val$stays_in_week_nights)^2
+
+children_prob = predict(linmodel,newdata=hotels_val,type = "response")
+
+roc_curve = roc(hotels_val$children ~ children_prob,plot=TRUE,print.auc=TRUE)
+
+```
+
+## Model Validation: Step 2
+
+For the next part, I created 20 random folds of data (all with 250 bookings each, except for one that only has 249 bookings). Then, I used my linear model to estimate whether or not we would expect to see children on each booking sample. I compared the sum of modeled number of bookings with children, with the actual number of bookings with children in each fold, and created a bar graph that shows both expected and actual number of bookings with children in each fold. 
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+set.seed(123)
+
+random_id <- order(runif(4999))
+
+fold1 <- hotels_val[random_id[1:250],]
+fold2 <- hotels_val[random_id[251:500],]
+fold3 <- hotels_val[random_id[501:750],]
+fold4 <- hotels_val[random_id[751:1000],]
+fold5 <- hotels_val[random_id[1001:1250],]
+fold6 <- hotels_val[random_id[1251:1500],]
+fold7 <- hotels_val[random_id[1501:1750],]
+fold8 <- hotels_val[random_id[1751:2000],]
+fold9 <- hotels_val[random_id[2001:2250],]
+fold10 <- hotels_val[random_id[2251:2500],]
+fold11 <- hotels_val[random_id[2501:2750],]
+fold12 <- hotels_val[random_id[2751:3000],]
+fold13 <- hotels_val[random_id[3001:3250],]
+fold14 <- hotels_val[random_id[3251:3500],]
+fold15 <- hotels_val[random_id[3501:3750],]
+fold16 <- hotels_val[random_id[3751:4000],]
+fold17 <- hotels_val[random_id[4001:4250],]
+fold18 <- hotels_val[random_id[4251:4500],]
+fold19 <- hotels_val[random_id[4501:4750],]
+fold20 <- hotels_val[random_id[4751:4999],]
+
+phat_fold1 = predict(linmodel,fold1)
+yhat_fold1 = ifelse(phat_fold1 > 0.5,1,0)
+#sum(yhat_fold1)
+#sum(fold1$children)
+
+phat_fold2 = predict(linmodel,fold2)
+yhat_fold2 = ifelse(phat_fold2 > 0.5,1,0)
+#sum(yhat_fold2)
+#sum(fold2$children)
+
+phat_fold3 = predict(linmodel,fold3)
+yhat_fold3 = ifelse(phat_fold3 > 0.5,1,0)
+#sum(yhat_fold3)
+#sum(fold3$children)
+
+phat_fold4 = predict(linmodel,fold4)
+yhat_fold4 = ifelse(phat_fold4 > 0.5,1,0)
+#sum(yhat_fold4)
+#sum(fold4$children)
+
+phat_fold5 = predict(linmodel,fold5)
+yhat_fold5 = ifelse(phat_fold5 > 0.5,1,0)
+#sum(yhat_fold5)
+#sum(fold5$children)
+
+phat_fold6 = predict(linmodel,fold6)
+yhat_fold6 = ifelse(phat_fold6 > 0.5,1,0)
+#sum(yhat_fold6)
+#sum(fold6$children)
+
+phat_fold7 = predict(linmodel,fold7)
+yhat_fold7 = ifelse(phat_fold7 > 0.5,1,0)
+#sum(yhat_fold7)
+#sum(fold7$children)
+
+phat_fold8 = predict(linmodel,fold8)
+yhat_fold8 = ifelse(phat_fold8 > 0.5,1,0)
+#sum(yhat_fold8)
+#sum(fold8$children)
+
+phat_fold9 = predict(linmodel,fold9)
+yhat_fold9 = ifelse(phat_fold9 > 0.5,1,0)
+#sum(yhat_fold9)
+#sum(fold9$children)
+
+phat_fold10 = predict(linmodel,fold10)
+yhat_fold10 = ifelse(phat_fold10 > 0.5,1,0)
+#sum(yhat_fold10)
+#sum(fold10$children)
+
+phat_fold11 = predict(linmodel,fold11)
+yhat_fold11 = ifelse(phat_fold11 > 0.5,1,0)
+#sum(yhat_fold11)
+#sum(fold11$children)
+
+phat_fold12 = predict(linmodel,fold12)
+yhat_fold12 = ifelse(phat_fold12 > 0.5,1,0)
+#sum(yhat_fold12)
+#sum(fold12$children)
+
+phat_fold13 = predict(linmodel,fold13)
+yhat_fold13 = ifelse(phat_fold13 > 0.5,1,0)
+#sum(yhat_fold13)
+#sum(fold13$children)
+
+phat_fold14 = predict(linmodel,fold14)
+yhat_fold14 = ifelse(phat_fold14 > 0.5,1,0)
+#sum(yhat_fold14)
+#sum(fold14$children)
+
+phat_fold15 = predict(linmodel,fold15)
+yhat_fold15 = ifelse(phat_fold15 > 0.5,1,0)
+#sum(yhat_fold15)
+#sum(fold15$children)
+
+phat_fold16 = predict(linmodel,fold16)
+yhat_fold16 = ifelse(phat_fold16 > 0.5,1,0)
+#sum(yhat_fold16)
+#sum(fold16$children)
+
+phat_fold17 = predict(linmodel,fold17)
+yhat_fold17 = ifelse(phat_fold17 > 0.5,1,0)
+#sum(yhat_fold17)
+#sum(fold17$children)
+
+phat_fold18 = predict(linmodel,fold18)
+yhat_fold18 = ifelse(phat_fold18 > 0.5,1,0)
+#sum(yhat_fold18)
+#sum(fold18$children)
+
+phat_fold19 = predict(linmodel,fold19)
+yhat_fold19 = ifelse(phat_fold19 > 0.5,1,0)
+#sum(yhat_fold19)
+#sum(fold19$children)
+
+phat_fold20 = predict(linmodel,fold20)
+yhat_fold20 = ifelse(phat_fold20 > 0.5,1,0)
+#sum(yhat_fold20)
+#sum(fold20$children)
+
+fold_index <- c(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20)
+children <- c(sum(yhat_fold1),sum(yhat_fold2),sum(yhat_fold3),sum(yhat_fold4),sum(yhat_fold5),
+              sum(yhat_fold6),sum(yhat_fold7),sum(yhat_fold8),sum(yhat_fold9),sum(yhat_fold10),
+              sum(yhat_fold11),sum(yhat_fold12),sum(yhat_fold13),sum(yhat_fold14),sum(yhat_fold15),
+              sum(yhat_fold16),sum(yhat_fold17),sum(yhat_fold18),sum(yhat_fold19),sum(yhat_fold20),sum(fold1$children),sum(fold2$children),sum(fold3$children),sum(fold4$children),
+              sum(fold5$children),sum(fold6$children),sum(fold7$children),sum(fold8$children),
+              sum(fold9$children),sum(fold10$children),sum(fold11$children),sum(fold12$children),
+              sum(fold13$children),sum(fold14$children),sum(fold15$children),sum(fold16$children),
+              sum(fold17$children),sum(fold18$children),sum(fold19$children),sum(fold20$children))
+type <- c('Predicted','Predicted','Predicted','Predicted','Predicted','Predicted','Predicted','Predicted','Predicted','Predicted','Predicted','Predicted','Predicted','Predicted','Predicted','Predicted','Predicted','Predicted','Predicted','Predicted','Actual','Actual','Actual','Actual','Actual','Actual','Actual','Actual','Actual','Actual','Actual','Actual','Actual','Actual','Actual','Actual','Actual','Actual','Actual','Actual')
+fold.data2 <- data.frame(fold_index,children,type)
+
+ggplot(data=fold.data2,aes(x=fold_index,y=children,fill=type))+geom_bar(stat="identity",position=position_dodge())+ggtitle("Actual and Predicted number of bookings with children")+xlab("Fold index")+ylab("Children")
+```
+
+\
+
+It looks like my model consistently underestimates the number of bookings with children within each fold by about an average of about 5.
