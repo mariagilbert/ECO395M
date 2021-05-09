@@ -1,0 +1,390 @@
+---
+title: "Assignment 4"
+author: "Maria Gilbert"
+date: "5/7/2021"
+output:  
+  pdf_document: default
+  df_print: paged
+  md_document: default
+always_allow_html: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+wine <- read.csv("~/Downloads/wine.csv")
+social_marketing <- read.csv("~/Downloads/social_marketing.csv")
+groceries <- read.csv("~/Downloads/groceries.txt",header=FALSE)
+
+library(tidyverse)
+library(ggplot2)
+library(randomForest)
+library(splines)
+library(pdp)
+library(ISLR)
+library(corrplot)
+library(factoextra)
+library(dendextend)
+library(plotly)
+library(grid)
+library(arules)
+library(arulesViz)
+
+```
+
+# Clustering and PCA
+
+Using data on 6500 different bottles of *vinho verde* wine from Northern Portugal, my goal is to use unsupervised learning to find a pattern that can predict whether a wine is red or white. My data includes 4898 white wines and 1599 red wines, with information on 11 chemical properties, including fixed acidity, volatile acidity, citric acid, residual sugar, chlorides, free sulfur dioxide, total sulfur dioxide, density, pH, sulphates, and alcohol, as well as an indicator of quality ranging from 1-10. 
+
+First, I want to see the relationships between density, pH, sulphates and color, using boxplots.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+ggplot()+geom_boxplot(data=wine,aes(x=color,y=density))+ggtitle("Density of red and white wines in sample")
+
+ggplot()+geom_boxplot(data=wine,aes(x=color,y=pH))+coord_flip()+ggtitle("pH of red and white wines in sample")
+
+ggplot()+geom_boxplot(data=wine,aes(x=color,y=sulphates))+ggtitle("Sulfates in red and white wines in sample")
+
+```
+
+I am also interested in seeing the actual correlations between wine color and all the other variables in the data set, to see which are the strongest indicators of whether a wine is white or red. The following table shows the correlation between color and all other variables:
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+wine$color <- as.factor(wine$color)
+
+wine2 <- wine
+wine2$red <- ifelse(wine2$color=="red",1,0)
+wine2$white <- ifelse(wine2$color=="white",1,0)
+wine2$color <- NULL
+
+tab <- matrix(c(cor(wine2$white,wine2$fixed.acidity),cor(wine2$white,wine2$volatile.acidity),cor(wine2$white,wine2$citric.acid),cor(wine2$white,wine2$residual.sugar),cor(wine2$white,wine2$chlorides),cor(wine2$white,wine2$free.sulfur.dioxide),cor(wine2$white,wine2$total.sulfur.dioxide),cor(wine2$white,wine2$density),cor(wine2$white,wine2$pH),cor(wine2$white,wine2$sulphates),cor(wine2$white,wine2$alcohol),cor(wine2$white,wine2$quality),cor(wine2$red,wine2$fixed.acidity),cor(wine2$red,wine2$volatile.acidity),cor(wine2$red,wine2$citric.acid),cor(wine2$red,wine2$residual.sugar),cor(wine2$red,wine2$chlorides),cor(wine2$red,wine2$free.sulfur.dioxide),cor(wine2$red,wine2$total.sulfur.dioxide),cor(wine2$red,wine2$density),cor(wine2$red,wine2$pH),cor(wine2$red,wine2$sulphates),cor(wine2$red,wine2$alcohol),cor(wine2$red,wine2$quality)),ncol=2,byrow=TRUE)
+colnames(tab) <- c('White','Red')
+rownames(tab) <- c('Fixed acidity','Volatile acidity','Citric acid','Residual sugar','Chlorides','Free sulfur dioxide',
+                   'Total sulfur dioxide','Density','pH','Sulfates','Alcohol','Quality')
+tab <- as.table(tab)
+tab
+
+```
+
+I find something interesting here, which is that there appears to be a very similar effect of residual sugar and sulfates on whether a wine is white or red. However, the correlation between residual sugar and sulfates is not as high as I would expect given this observation. This correlation is:
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+cor(wine2$residual.sugar,wine2$sulphates)
+```
+
+Similarly, I notice a similar effect between alcohol and free sulfur dioxide. This correlation is:
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+cor(wine2$alcohol,wine2$free.sulfur.dioxide)
+```
+
+Now, I know that wine color is probably most related to residual sugar, sulfates, fixed acidity, citric acid, total sulfur dioxide, alcohol, pH, and chlorides. Less important factors are quality, free sulfur dioxide, volatile acidity, and density.
+
+## PCA: Principal Components Analysis
+
+Here, I will use Principal Components Analysis to find the components which can predict whether a wine is white or red. Instead of using the qualities that I previously found to have relatively high correlations with wine color, I will be allowing the algorithm to organize the information from the data.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+X <- unlist(lapply(wine,is.numeric))
+wine3 <- wine[,X]
+wine4 <- as.data.frame(scale(wine3,center=TRUE,scale=TRUE))
+center <- attr(wine4,"scaled::center")
+scale <- attr(wine4,"scaled::scale")
+
+corrplot(cor(wine3),type="upper",method="square",tl.cex=1)
+
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+pc_wine = prcomp(wine4,center=TRUE,scale=TRUE)
+
+summary(pc_wine)
+
+sdev <- pc_wine$sdev
+sdev2 <- sdev^2
+pvx <- sdev2/sum(sdev2)
+
+fviz_eig(pc_wine,addlabels=TRUE,ylim=c(0,30),geom=c("bar","line"),barfill="tomato",barcolor="grey",linecolor="black",ncp=10)+labs(title="Principal Components versus % of variance explained", x="Principal Components",y="Percent of variances")
+
+loadings=pc_wine$rotation
+scores=pc_wine$x
+
+clust_pc <- kmeans(scores[,1:3],2,nstart=30)
+q <- qplot(scores[,1],scores[,2],color=wine2$red,shape=factor(clust_pc$cluster))
+q + labs(title="Red and white wine PCA clustering", x=" ", y=" ")
+
+```
+
+## K-means clustering
+
+K-means clustering is a method of centroid-based clustering, where clusters are represented by a central vector or centroid. This method organizes the data into k clusters. Since I am trying to see a pattern to predict whether a wine is red or white, I will use k = 2 for this exercise. 
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+set.seed(123)
+clusters <- kmeans(wine4,centers=2,iter.max=100,nstart=30)
+wine$cluster <- as.factor(clusters$cluster)
+
+str(clusters)
+
+fviz_cluster(list(data=wine4,cluster=clusters$cluster),ellipse.type="norm",geom="point",stand=FALSE,palette="jco",ggtheme=theme_classic())
+
+```
+
+Now that I have identified 2 clusters, I want to see how many red versus white wines are present in each of the 2 clusters.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+tab2 <- xtabs(~wine$cluster + wine$color) %>% as.table()
+tab2
+
+```
+
+Given 1,599 red wines and 4,898 white wines, and the above data table, I can use Bayes' Theorem to evaluate how closely my K-means clustering can predict the color of a wine. Overall within this data set there is a 24.6% of any one randomly chosen wine being red, and a 75.4% chance  of being white. Within the 1,668 wines in cluster 2, there is a 94.7% chance on any of randomly chosen wine being red. Within the 4849 wines in cluster 1, there is a 99.4% chance of any randomly chosen wine being white. 
+
+## K-means clustering for wine quality
+
+Now, I will apply the same method, using k = 7 clusters to represent quality categories of 3, 4, 5, 6, 7, 8, and 9.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+set.seed(123)
+clusters7 <- kmeans(wine4,centers=7,iter.max=100,nstart=30)
+wine$cluster7 <- as.factor(clusters7$cluster)
+
+str(clusters7)
+
+fviz_cluster(list(data=wine4,cluster=clusters7$cluster),ellipse.type="norm",geom="point",stand=FALSE,palette="jco",ggtheme=theme_classic())
+
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+tab3 <- xtabs(~wine$cluster7 + wine$quality) %>% as.table()
+tab3
+
+```
+
+In the data set, we have 30 wines of quality 3, 216 wines of quality 4, 2138 wines of quality 5, 2836 wines of quality 6, 1079 wines of quality 7, 193 wines of quality 8, and 5 wines of quality 9. 
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+ggplot(data=wine,aes(x=factor(quality)))+geom_bar()+xlab("Quality level of wine")+ylab("Number of wines")+ggtitle("Number of sampled wines of each quality level")
+
+```
+
+Again, I can use Bayes' theorem to evaluate how well the clustering algorithm lines up with wine quality. The following table shows the % chances of a wine in any given cluster being of a certain quality level. 
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+x1=(8/30)*(30/6497)*(6497)/(8+27+668+654+119+18+0)
+x2=(27/216)*(216/6497)*(6497)/(8+27+668+654+119+18+0)
+x3=(668/2138)*(2138/6497)*(6497)/(8+27+668+654+119+18+0)
+x4=(654/2836)*(2836/6497)*(6497)/(8+27+668+654+119+18+0)
+x5=(119/1079)*(1079/6497)*(6497)/(8+27+668+654+119+18+0)
+x6=(18/193)*(193/6497)*(6497)/(8+27+668+654+119+18+0)
+x7=0
+y1=0
+y2=0
+y3=(21/2138)*(2138/6497)*(6497)/(21+572+604+146+5)
+y4=(572/2836)*(2836/6497)*(6497)/(21+572+604+146+5)
+y5=(604/1079)*(1079/6497)*(6497)/(21+572+604+146+5)
+y6=(146/193)*(193/6497)*(6497)/(21+572+604+146+5)
+y7=(5/6497)*(6497)/(21+572+604+146+5)
+z1=(9/30)*(30/6497)*(6497)/(9+92+561+410+12)
+z2=(92/216)*(216/6497)*(6497)/(9+92+561+410+12)
+z3=(561/2138)*(2138/6497)*(6497)/(9+92+561+410+12)
+z4=(410/2836)*(2836/6497)*(6497)/(9+92+561+410+12)
+z5=(12/1079)*(1079/6497)*(6497)/(9+92+561+410+12)
+z6=0
+z7=0
+a1=(6/30)*(30/6497)*(6497)/(6+73+507+343+40+2)
+a2=(73/216)*(216/6497)*(6497)/(6+73+507+343+40+2)
+a3=(507/2138)*(2138/6497)*(6497)/(6+73+507+343+40+2)
+a4=(343/2836)*(2836/6497)*(6497)/(6+73+507+343+40+2)
+a5=(40/1079)*(1079/6497)*(6497)/(6+73+507+343+40+2)
+a6=(2/193)*(193/6497)*(6497)/(6+73+507+343+40+2)
+a7=0
+b1=(3/30)*(30/6497)*(6497)/(3+8+158+267+137+11)
+b2=(8/216)*(216/6497)*(6497)/(3+8+158+267+137+11)
+b3=(158/2138)*(2138/6497)*(6497)/(3+8+158+267+137+11)
+b4=(267/2836)*(2836/6497)*(6497)/(3+8+158+267+137+11)
+b5=(137/1079)*(1079/6497)*(6497)/(3+8+158+267+137+11)
+b6=(11/193)*(193/6497)*(6497)/(3+8+158+267+137+11)
+b7=0
+c1=(1/30)*(30/6497)*(6497)/(1+14+196+574+166+16)
+c2=(14/216)*(216/6497)*(6497)/(1+14+196+574+166+16)
+c3=(196/2138)*(2138/6497)*(6497)/(1+14+196+574+166+16)
+c4=(574/2836)*(2836/6497)*(6497)/(1+14+196+574+166+16)
+c5=(166/1079)*(1079/6497)*(6497)/(1+14+196+574+166+16)
+c6=(16/193)*(193/6497)*(6497)/(1+14+196+574+166+16)
+c7=0
+d1=(3/30)*(30/6497)*(6497)/(3+2+27+16+1)
+d2=(2/216)*(216/6497)*(6497)/(3+2+27+16+1)
+d3=(27/2138)*(2138/6497)*(6497)/(3+2+27+16+1)
+d4=(16/2836)*(16/2836)*(6497)/(3+2+27+16+1)
+d5=(1/1079)*(1079/6497)*(6497)/(3+2+27+16+1)
+d6=0
+d7=0
+
+
+tab3 <- matrix(c(x1,x2,x3,x4,x5,x6,x7,y1,y2,y3,y4,y5,y6,y7,z1,z2,z3,z4,z5,z6,z7,a1,a2,a3,a4,a5,a6,a7,b1,b2,b3,b4,b5,b6,b7,c1,c2,c3,c4,c5,c6,c7,d1,d2,d3,d4,d5,d6,d7),ncol=7,byrow=TRUE)
+colnames(tab3) <- c('3','4','5','6','7','8','9')
+rownames(tab3) <- c('Cluster 1','Cluster 2','Cluster 3','Cluster 4','Cluster 5','Cluster 6','Cluster 7')
+tab3 <- as.table(tab3)
+tab3
+
+```
+
+# Market Segmentation
+
+Using data on Twitter activity from 7882 randomly selected users, I would like to use clustering to find patterns in the data. This data includes how much interaction users had that is categorized as chatter, current events, travel, photo sharing, tv and film, sports fans, politics, food, family, home and garden, music, news, online gaming, shopping, health and nutrition, college and universities, playing sports, cooking, eco, computers, business, outdoors, crafts, automotive, art, religion, beauty, parenting, dating, school, personal fitness, fashion, small business, adult, spam, and uncategorized material. 
+
+The first thing I want to is make sure that I am filtering out users who have either 0 values for all of these content categories, as well as those who have 0 values for all those except spam, adult, and/or uncategorized. I am doing this because I believe these users are probably bots and won't be relevant in my analysis.
+
+It turns out there were ZERO users who had either all 0 values or all 0 values except for spam, adult, and uncategorized. 
+
+It can be expected that certain categories will be correlated with each other. For example, family and parenting or news and current events. The following figure shows each category's correlation with the others. 
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+social_marketing$X <- NULL
+corrplot(cor(social_marketing),type="upper",method="square",tl.cex=1)
+
+```
+
+This plot is almost too big to understand, so thankfully we have PCA and K-means to better organize this data. I will try PCA as well as K-means testing out several different values of K to see which one seems most appropriate.
+
+## PCA
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+X <- unlist(lapply(social_marketing,is.numeric))
+social_marketing2 <- social_marketing[,X]
+social_marketing_scaled <- as.data.frame(scale(social_marketing2,center=TRUE,scale=TRUE))
+center <- attr(social_marketing_scaled,"scaled::center")
+scale <- attr(social_marketing_scaled,"scaled::scale")
+
+pc_sm = prcomp(social_marketing_scaled,center=TRUE,scale=TRUE)
+
+summary(pc_sm)
+
+sdev <- pc_sm$sdev
+sdev2 <- sdev^2
+pvx <- sdev2/sum(sdev2)
+
+fviz_eig(pc_sm,addlabels=TRUE,ylim=c(0,30),geom=c("bar","line"),barfill="lightskyblue4",barcolor="grey",linecolor="black",ncp=10)+labs(title="Principal Components versus % of variance explained", x="Principal Components",y="Percent of variances")
+
+loadings=pc_sm$rotation
+scores=pc_sm$x
+
+clust_pc <- kmeans(scores[,1:3],2,nstart=30)
+q <- qplot(scores[,1],scores[,2],shape=factor(clust_pc$cluster))
+q + labs(title="Twitter user data PCA clustering", x=" ", y=" ")
+
+```
+
+Unfortunately, principal components do not seem to do a very good job of explaining variances in this exercise, with the top 10 principal compoments only explaining 61% of the variance. It is not terrible, but I think that K-means will do a little better. 
+
+## K-means clustering
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+set.seed(123)
+sm_clusters <- kmeans(social_marketing_scaled,centers=2,iter.max=100,nstart=30)
+social_marketing$cluster <- as.factor(sm_clusters$cluster)
+
+str(sm_clusters)
+
+fviz_cluster(list(data=social_marketing_scaled,cluster=sm_clusters$cluster),ellipse.type="norm",geom="point",stand=FALSE,palette="jco",ggtheme=theme_classic())
+
+sm_tab <- matrix(c(mean(social_marketing$chatter[social_marketing$cluster==1]),mean(social_marketing$chatter[social_marketing$cluster==2]),mean(social_marketing$current_events[social_marketing$cluster==1]),mean(social_marketing$current_events[social_marketing$cluster==2]),mean(social_marketing$travel[social_marketing$cluster==1]),mean(social_marketing$travel[social_marketing$cluster==2]),mean(social_marketing$photo_sharing[social_marketing$cluster==1]),mean(social_marketing$photo_sharing[social_marketing$cluster==2]),mean(social_marketing$uncategorized[social_marketing$cluster==1]),mean(social_marketing$uncategorized[social_marketing$cluster==2]),mean(social_marketing$tv_film[social_marketing$cluster==1]),mean(social_marketing$tv_film[social_marketing$cluster==2]),mean(social_marketing$sports_fandom[social_marketing$cluster==1]),mean(social_marketing$sports_fandom[social_marketing$cluster==2]),mean(social_marketing$politics[social_marketing$cluster==1]),mean(social_marketing$politics[social_marketing$cluster==2]),mean(social_marketing$food[social_marketing$cluster==1]),mean(social_marketing$food[social_marketing$cluster==2]),mean(social_marketing$family[social_marketing$cluster==1]),mean(social_marketing$family[social_marketing$cluster==2]),mean(social_marketing$home_and_garden[social_marketing$cluster==1]),mean(social_marketing$home_and_garden[social_marketing$cluster==1]),mean(social_marketing$music[social_marketing$cluster==1]),mean(social_marketing$music[social_marketing$cluster==2]),mean(social_marketing$news[social_marketing$cluster==1]),mean(social_marketing$news[social_marketing$cluster==2]),mean(social_marketing$online_gaming[social_marketing$cluster==1]),mean(social_marketing$online_gaming[social_marketing$cluster==2]),mean(social_marketing$shopping[social_marketing$cluster==1]),mean(social_marketing$shopping[social_marketing$cluster==2]),mean(social_marketing$health_nutrition[social_marketing$cluster==1]),mean(social_marketing$health_nutrition[social_marketing$cluster==2]),mean(social_marketing$college_uni[social_marketing$cluster==1]),mean(social_marketing$college_uni[social_marketing$cluster==2]),mean(social_marketing$sports_playing[social_marketing$cluster==1]),mean(social_marketing$sports_playing[social_marketing$cluster==2]),mean(social_marketing$cooking[social_marketing$cluster==1]),mean(social_marketing$cooking[social_marketing$cluster==2]),mean(social_marketing$eco[social_marketing$cluster==1]),mean(social_marketing$eco[social_marketing$cluster==2]),mean(social_marketing$computers[social_marketing$cluster==1]),mean(social_marketing$computers[social_marketing$cluster==2]),mean(social_marketing$business[social_marketing$cluster==1]),mean(social_marketing$business[social_marketing$cluster==2]),mean(social_marketing$outdoors[social_marketing$cluster==1]),mean(social_marketing$outdoors[social_marketing$cluster==2]),mean(social_marketing$crafts[social_marketing$cluster==1]),mean(social_marketing$crafts[social_marketing$cluster==1]),mean(social_marketing$automotive[social_marketing$cluster==1]),mean(social_marketing$automotive[social_marketing$cluster==2]),mean(social_marketing$art[social_marketing$cluster==1]),mean(social_marketing$art[social_marketing$cluster==2]),mean(social_marketing$religion[social_marketing$cluster==1]),mean(social_marketing$religion[social_marketing$cluster==2]),mean(social_marketing$beauty[social_marketing$cluster==1]),mean(social_marketing$beauty[social_marketing$cluster==2]),mean(social_marketing$parenting[social_marketing$cluster==1]),mean(social_marketing$parenting[social_marketing$cluster==2]),mean(social_marketing$dating[social_marketing$cluster==1]),mean(social_marketing$dating[social_marketing$cluster==2]),mean(social_marketing$school[social_marketing$cluster==1]),mean(social_marketing$school[social_marketing$cluster==2]),mean(social_marketing$personal_fitness[social_marketing$cluster==1]),mean(social_marketing$personal_fitness[social_marketing$cluster==2]),mean(social_marketing$fashion[social_marketing$cluster==1]),mean(social_marketing$fashion[social_marketing$cluster==2]),mean(social_marketing$small_business[social_marketing$cluster==1]),mean(social_marketing$small_business[social_marketing$cluster==2]),mean(social_marketing$spam[social_marketing$cluster==1]),mean(social_marketing$spam[social_marketing$cluster==2]),mean(social_marketing$adult[social_marketing$cluster==1]),mean(social_marketing$adult[social_marketing$cluster==2])),ncol=2,byrow=TRUE)
+colnames(sm_tab) <- c('Cluster 1','Cluster 2')
+rownames(sm_tab) <- c('Chatter','Current Events','Travel','Photo Sharing','Uncategorized','TV/film','Sports fandom','Politics','Food','Family','Home and garden','Music','News','Online Gaming','Shopping','Health and Nutrition','College and Universities','Sports playing','Cooking','Eco','Computers','Business','Outdoors','Crafts','Automotive','Art','Religion','Beauty','Parenting','Dating','School','Personal fitness','Fashion','Small business','Spam','Adult')
+sm_tab <- as.table(sm_tab)
+sm_tab
+
+```
+
+The main conclusion I can draw from this is that Cluster 1 constitutes more active Twitter users, while Cluster 2 constitutes less active users. 
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+set.seed(123)
+sm_clusters <- kmeans(social_marketing_scaled,centers=3,iter.max=100,nstart=30)
+social_marketing$cluster <- as.factor(sm_clusters$cluster)
+
+str(sm_clusters)
+
+fviz_cluster(list(data=social_marketing_scaled,cluster=sm_clusters$cluster),ellipse.type="norm",geom="point",stand=FALSE,palette="jco",ggtheme=theme_classic())
+
+sm_tab3 <- matrix(c(mean(social_marketing$chatter[social_marketing$cluster==1]),mean(social_marketing$chatter[social_marketing$cluster==2]),mean(social_marketing$chatter[social_marketing$cluster==3]),mean(social_marketing$news[social_marketing$cluster==1]),mean(social_marketing$news[social_marketing$cluster==2]),mean(social_marketing$news[social_marketing$cluster==3]),mean(social_marketing$family[social_marketing$cluster==1]),mean(social_marketing$family[social_marketing$cluster==2]),mean(social_marketing$family[social_marketing$cluster==3]),mean(social_marketing$health_nutrition[social_marketing$cluster==1]),mean(social_marketing$health_nutrition[social_marketing$cluster==2]),mean(social_marketing$health_nutrition[social_marketing$cluster==3]),mean(social_marketing$business[social_marketing$cluster==1]),mean(social_marketing$business[social_marketing$cluster==2]),mean(social_marketing$business[social_marketing$cluster==3])),ncol=3,byrow=TRUE)
+
+colnames(sm_tab3) <- c('Cluster 1','Cluster 2','Cluster 3')
+rownames(sm_tab3) <- c('Chatter','News','Family','Health and Nutrition','Business')
+
+sm_tab3 <- as.table(sm_tab3)
+sm_tab3
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+set.seed(123)
+sm_clusters <- kmeans(social_marketing_scaled,centers=4,iter.max=100,nstart=30)
+social_marketing$cluster <- as.factor(sm_clusters$cluster)
+
+str(sm_clusters)
+
+fviz_cluster(list(data=social_marketing_scaled,cluster=sm_clusters$cluster),ellipse.type="norm",geom="point",stand=FALSE,palette="jco",ggtheme=theme_classic())
+
+sm_tab4 <- matrix(c(mean(social_marketing$tv_film[social_marketing$cluster==1]),mean(social_marketing$tv_film[social_marketing$cluster==2]),mean(social_marketing$tv_film[social_marketing$cluster==3]),mean(social_marketing$tv_film[social_marketing$cluster==4]),mean(social_marketing$sports_fandom[social_marketing$cluster==1]),mean(social_marketing$sports_fandom[social_marketing$cluster==2]),mean(social_marketing$sports_fandom[social_marketing$cluster==3]),mean(social_marketing$sports_fandom[social_marketing$cluster==4]),mean(social_marketing$family[social_marketing$cluster==1]),mean(social_marketing$family[social_marketing$cluster==2]),mean(social_marketing$family[social_marketing$cluster==3]),mean(social_marketing$family[social_marketing$cluster==4]),mean(social_marketing$eco[social_marketing$cluster==1]),mean(social_marketing$eco[social_marketing$cluster==2]),mean(social_marketing$eco[social_marketing$cluster==3]),mean(social_marketing$eco[social_marketing$cluster==4]),mean(social_marketing$personal_fitness[social_marketing$cluster==1]),mean(social_marketing$personal_fitness[social_marketing$cluster==2]),mean(social_marketing$personal_fitness[social_marketing$cluster==3]),mean(social_marketing$personal_fitness[social_marketing$cluster==4])),ncol=4,byrow=TRUE)
+
+colnames(sm_tab4) <- c('Cluster 1','Cluster 2','Cluster 3','Cluster 4')
+rownames(sm_tab4) <- c('TV/film','Sports fans','Family','Eco','Personal fitness')
+
+sm_tab4 <- as.table(sm_tab4)
+sm_tab4
+
+```
+
+
+# Association rules for grocery purchases
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+path_out = 'C:\\Users\\mariagilbert\\Downloads\\'
+write.csv(groceries,paste(path_out,'groceries.csv',sep=''),quote=FALSE,row.names=FALSE)
+groceries2 <- read.transactions('C:\\Users\\mariagilbert\\Downloads\\groceries.csv',format="basket",sep=",")
+summary(groceries2)
+itemFrequencyPlot(groceries2,topN=10,type="absolute",main="Frequency of various grocery items being purchased by individuals")
+
+assoc.rules <- apriori(groceries2,parameter=list(supp=0.005,conf=0.3,maxlen=10))
+summary(assoc.rules)
+inspectDT(assoc.rules)
+```
+
+From this analysis, I can tell that:
+- 40.4% of those who bought butter also bought whole milk
+- 39.9% of those who bought other vegetables and yogurt also bought whole milk
+- 37.4% of those who bought onions also bought other vegetables
+- 36.8% of those who bought curd also bought whole milk
+- 36.2% of those who bought root vegetables also bought other vegetables
+- 36.1% of those who bought root vegetables and whole milk also bought other vegetables
+- 32.8% of those who bought other vegetables also bought whole milk
+- 32.3% of those who bought root vegetables also bought whole milk
+- 32.2% of those who bought other vegetables and root vegetables also bought whole milk
+
+Basically, everyone is buying vegetables and whole milk. We can see that these items are fairly central to the network in the following graph.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+plot(assoc.rules,method="graph")
+
+```
+
+# Author Attribution
+
+Using text analysis, I would like to create an unsupervised learning algorithm that will help to use text content to predict which author wrote a certain article.
+
+I tried this problem for way too much time. I could not get it to work. This assignment was absolutely insane especially due less than one week before the project is due. 
